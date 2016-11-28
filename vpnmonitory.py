@@ -9,12 +9,14 @@ import os
 import signal
 import getopt
 import time
+import getpass
 import pdb
 
 application=sys.argv[1]
 __procopenvpn=0
 __procapp=0
-	
+password = ""
+app=""
 def vpn_handler(*args, **kwargs):
     print "Caught signal (in catchall handler) "
     print args
@@ -35,19 +37,32 @@ def vpn_handler(*args, **kwargs):
 
 def startOpenVpn(optarg,app):
     cmd = list()
-    cmd = ["nohup","/usr/sbin/openvpn","--daemon", "--config",optarg,"--log","/var/log/openvpn.log"]
-    global __procopenvpn
-    print optarg
-    __procopenvpn = Popen(cmd, close_fds=True,preexec_fn=os.setsid)
-    time.sleep(5)
-    print app
-    cmd = ["nohup",app,"&"]
-    global __procapp
-    __procapp = Popen(cmd, close_fds=True,preexec_fn=os.setsid)
-    time.sleep(2)
+    cmd = ['sudo','-S','/usr/sbin/openvpn',"--daemon", "--config",optarg,"--log","/var/log/openvpn.log"]
 
-def mainloop():
-    time.sleep(5)
+    #cmd = 'sudo -S /usr/sbin/openvpn --config ' + optarg + '--daemon --log /var/log/openvpn.log'
+    global __procopenvpn
+    print cmd
+    global password
+    password = getpass.getpass("enter sudo password:")
+    __procopenvpn = Popen(cmd, stdin=subprocess.PIPE,stderr=subprocess.PIPE)
+    output,err = __procopenvpn.communicate(password+'\n')
+    #pdb.set_trace()
+
+def mainloop(app):
+    while(True):
+        cmd = ["ifconfig","tun0"]
+        proc = Popen(cmd, stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+        out, err = proc.communicate()
+        time.sleep(10)
+        if("UP POINTOPOINT" in out):
+            break
+    print app
+    if app:
+        cmd = ["nohup",app,"&"]
+        global __procapp
+        __procapp = Popen(cmd, close_fds=True,preexec_fn=os.setsid)
+
+    time.sleep(2)
     while(True):
         cmd = ["ifconfig","tun0"]
         proc = Popen(cmd, stdin=subprocess.PIPE,stdout=subprocess.PIPE)
@@ -56,31 +71,34 @@ def mainloop():
             time.sleep(2)
             continue
         else:
-            print "killing " + str(__procapp.pid)
-            os.killpg(__procapp.pid, signal.SIGUSR1)
+            cmd = 'ps aux |grep -v grep | grep "Tribler.Main"' 
+            proc = Popen(cmd, stdin=subprocess.PIPE,stdout=subprocess.PIPE,shell=True)
+            out,err = proc.communicate()
+            procId= out.split()[1]
+            print 'killing procId: ' + procId
+            if procId:
+               proc = Popen("kill -9 " + procId, stdin=subprocess.PIPE,shell=True)
             time.sleep(2)
-            print "killing " + str(__procopenvpn.pid)
-            os.killpg(__procopenvpn.pid, signal.SIGUSR1)
-            os.killpg(__procopenvpn.pid+1, signal.SIGUSR1)
+            print "killing openvpn"
+            cmd = ["sudo","killall",'-9',"openvpn"]
+            prockill = Popen(cmd, stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+            out,err=prockill.communicate(password+'\n')
+            print out
             break
 
-
-
-
-if __name__ == "__main__":
-    
+if __name__ == "__main__":    
     #application to start or kill when vpn is on or off 
-    opts, args = getopt.getopt(sys.argv[1:], "oan:h", ["openvpn=","application=","networkManager="])
-    app = ""
-    for opt, arg in opts:
-        if opt in ("-o", "--openvpn"):             
-            pdb.set_trace()
+    opts, args = getopt.getopt(sys.argv[1:], "oa:n:h", ["openvpn=","application=","networkManager="])
+    #pdb.set_trace()
 
+    for opt, arg in opts:
+        if opt in ("-o", "--openvpn"): 
         #start openvpn via commandline
             startcmd = True
             optarg = arg
         elif opt in ("-a","--application"):
             app = arg
+            print app
         elif opt in ("-n","--networkManager"):
             bus= dbus.SystemBus()
             object = bus.get_object('org.freedesktop.NetworkManager',
@@ -93,5 +111,5 @@ if __name__ == "__main__":
             assert False, "unhandled option"
     if(startcmd):
         startOpenVpn(optarg,app)
-        mainloop()
+        mainloop(app)
 
